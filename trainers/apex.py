@@ -259,7 +259,6 @@ class VLPromptLearner(nn.Module):
             try: embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
             except: embedding = clip_model.text.token_embedding(tokenized_prompts).type(dtype)
 
-
         
 
         # These token vectors will be saved when in save_model(),
@@ -268,6 +267,8 @@ class VLPromptLearner(nn.Module):
         self.register_buffer("token_prefix", embedding[:, :1, :])  # SOS
         self.register_buffer("token_suffix", embedding[:, 1 + n_ctx:, :])  # CLS, EOS
 
+
+        # register tokenized_prompts for adaptive ensemble
         self.register_buffer("trained_tokenized_prompts", tokenized_prompts)
 
         self.n_cls = n_cls
@@ -325,13 +326,13 @@ class CustomCLIP(nn.Module):
         except: self.dtype = clip_model.visual.conv1.weight.dtype
         
 
+        # initialize text adapter
         self.VPT_adapter_text_matrix = torch.nn.Parameter(torch.randn(512, 512))
         self.VPT_adapter_text_matrix.requires_grad = True
         # initailize with torch.eye
         self.VPT_adapter_text_matrix.data = torch.eye(512, 512).cuda()
 
         
-
         self.VPT_adapter_text_bias = torch.nn.Parameter(torch.randn(1, 512))
         self.VPT_adapter_text_bias.requires_grad = True
         # initailize with torch.eye
@@ -347,8 +348,9 @@ class CustomCLIP(nn.Module):
             print(f"Loading CLIP (backbone: {cfg.MODEL.BACKBONE.NAME})")
             self.clip_model_temp = load_clip_to_cpu(cfg)
 
+        # to get the coefficient
         self.alread_init = False
-        self.finish_learning = False
+
 
 
     def init_coeff(self):
@@ -357,28 +359,27 @@ class CustomCLIP(nn.Module):
             prompts = self.prompt_learner()
             test_tokenized_prompts = self.prompt_learner.tokenized_prompts
             
+            # text feartures of base classes 
             trained_features = self.clip_model_temp.encode_text(trained_tokenized_prompts.cuda()).type(self.dtype)
+
+            # text features of test(novel or base) classes
             test_features = self.clip_model_temp.encode_text(test_tokenized_prompts.cuda()).type(self.dtype)
 
 
             # Compute the cosine similarity matrix
             cosine_sim_matrix = F.cosine_similarity(trained_features.unsqueeze(1), test_features.unsqueeze(0), dim=-1)
 
-            # Convert cosine similarity scores to weights using softmax
-            weights = F.softmax(cosine_sim_matrix, dim=0)
-
-            # Compute the weighted sum
-            self.ensemble_features = torch.mm(weights.transpose(0,1), trained_features)
 
             # If you still want to compute the difference as before (optional)
             # nearset neighbor
-            self.diff = 1.0 - cosine_sim_matrix.max(dim=0)[0].reshape(-1, 1)
+            self.diff_nn = 1.0 - cosine_sim_matrix.max(dim=0)[0].reshape(-1, 1)
             
 
-            # average features
-            self.diff_2 = 1.0 - F.cosine_similarity(trained_features.unsqueeze(1), test_features.unsqueeze(0), dim=-1).mean(dim=0).reshape(-1, 1)
-            self.diff = self.diff * (self.diff > 0)
-            self.original_embeddings = test_features
+            # average distance 
+            self.diff_avg = 1.0 - F.cosine_similarity(trained_features.unsqueeze(1), test_features.unsqueeze(0), dim=-1).mean(dim=0).reshape(-1, 1)
+
+            self.diff_nn = self.diff_nn * (self.diff_nn > 0)
+
 
 
     def forward(self, image, label=None):
@@ -405,25 +406,31 @@ class CustomCLIP(nn.Module):
         else:
             with torch.no_grad():
 
- 
+                # image features using pretrained clip
                 image_original_features = self.clip_model_temp.encode_image(image.cuda()).type(self.dtype)
-  
+
+                # calculate the adapted features
                 text_adapted_features = text_features @self.VPT_adapter_text_matrix.type(self.dtype) + self.VPT_adapter_text_bias.type(self.dtype)
-    
+
+
+                # scaling factor beta
                 beta = 4.0
 
-                # ## compute the coefficient alpha using the difference
-                diff_coeff = self.diff_2*(self.diff>0.05)
+                # compute the adaptive coefficient alpha using the difference
+                diff_coeff = self.diff_avg * (self.diff_nn > 0.05)
                 alpha = torch.exp(-beta*diff_coeff).type(self.dtype)
             
+                # get text ensembled features
+                text_adapted_features = alpha * text_adapted_features + (1-alpha) * text_features
                 
-                text_adapted_features = alpha*text_adapted_features + (1-alpha)*text_features
-                
+                # get image ensembled features
                 image_features = alpha.mean().reshape(-1,1) * image_features + (1-alpha.mean().reshape(-1,1)) * image_original_features
 
-
+        # normalize the features
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         text_adapted_features = text_adapted_features / text_adapted_features.norm(dim=-1, keepdim=True)
+
+        
         if self.logit_bias is None:
             logits = logit_scale * image_features @ text_adapted_features.t()
         else:

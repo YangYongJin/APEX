@@ -5,10 +5,10 @@ This codebase is tested on Ubuntu 20.04.2 LTS with python 3.8. Follow the below 
 * Setup conda environment (recommended).
 ```bash
 # Create a conda environment
-conda create -y -n maple python=3.8
+conda create -y -n apex python=3.8
 
 # Activate the environment
-conda activate maple
+conda activate apex
 
 # Install torch (requires version >= 1.8.1) and torchvision
 # Please refer to https://pytorch.org/ if you need a different cuda version
@@ -41,7 +41,7 @@ elif optim == "adamw":
             weight_decay=weight_decay,
             betas=(adam_beta1, adam_beta2),
         )
-#### New Part Added to the original code ####
+#### New Part Added to the Original Code ####
 elif optim == "adadelta":
     optimizer = torch.optim.Adadelta(param_groups, lr=lr, weight_decay=weight_decay)
 ##### End #####

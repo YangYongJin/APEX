@@ -12,8 +12,8 @@ SEEDS=$(seq 1 20)
 NUM_SEEDS=20
 
 
-COMMON_DIR_PREFIX=${DATASET}/shots_${SHOTS}/${TRAINER}/${CFG}_clipadapter/seed
-OUTPUT_DIR=output/base2new/test_${SUB}/${DATASET}/shots_${SHOTS}/${TRAINER}/${CFG}_clipadapter
+COMMON_DIR_PREFIX=${DATASET}/shots_${SHOTS}/${TRAINER}/${CFG}/seed
+OUTPUT_DIR=output/base2new/test_${SUB}/${DATASET}/shots_${SHOTS}/${TRAINER}/${CFG}
 
 # initialize variables to hold the sum of all accuracies and macro_f1 scores
 sum_accuracy=0
